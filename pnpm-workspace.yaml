@@ -84,3 +84,4 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-fs-patch@0.2.2-rc.5'
   - '@deepseek-ai/dsh-official-bundles@0.2.2-rc.5'
   - '@deepseek-ai/dsh-storage-json@0.2.2-rc.5'
+  - '@deepseek-ai/dsh-goal@0.2.2-rc.5'

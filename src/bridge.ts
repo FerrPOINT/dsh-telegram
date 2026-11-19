@@ -13,6 +13,7 @@ import type { FileAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachm
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-goal'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 // Type-only: `ctx.tools` on Agent scopes.
 import type {} from '@deepseek-ai/dsh-tools'
@@ -41,6 +42,7 @@ import type {
   TelegramWidgetQuery,
 } from './client.js'
 import { escapeHtml } from './format.js'
+import { goalNotification } from './goals.js'
 import { localMediaKind, localMediaPath, mediaLink, mediaPlaceholder, rewriteMarkdownImages } from './media.js'
 import type { LocalMediaKind, MarkdownImage } from './media.js'
 import { encodePanel, PANEL_HTML } from './panel.js'
@@ -2398,6 +2400,19 @@ export class TelegramBridge {
   private handleSessionEvent(session: Session, event: SessionEvent): void {
     const chat = this.chatsBySession.get(session.id)
     if (chat === undefined) return
+    if (event.type === 'goal/change') {
+      const notice = goalNotification(event.data)
+      if (notice !== undefined) {
+        void this.enqueue(chat, async () => {
+          if (await this.deliverResult(chat, notice) !== 'failed') {
+            const ref = event.data.operation === 'clear' ? event.data.cleared : event.data.goal
+            this.ctx.logger.info('[telegram] goal notice delivered: session=%s goal=%s revision=%d operation=%s',
+              session.id, ref.id, ref.revision, event.data.operation)
+          }
+        })
+      }
+      return
+    }
     const presented = presentedFiles(event)
     if (presented !== undefined) {
       // Relative paths use the Session working directory, exactly as `present` resolved them.
@@ -2479,7 +2494,8 @@ export class TelegramBridge {
           try {
             const media: TelegramRichMedia[] = await Promise.all(embedded.media.map(async file =>
               ({ id: file.id, type: file.kind, file: await openAsBlob(file.path), fileName: basename(file.path) })))
-            await this.client.sendRichMessageWithMedia(chat.chatId, embedded.text, media, signal)
+            const sent = await this.client.sendRichMessageWithMedia(chat.chatId, embedded.text, media, signal)
+            this.ctx.logger.info('[telegram] result delivered: session=%s message=%d', chat.sessionId, sent.message_id)
             uploaded = true
             return
           } catch (error) {
@@ -2487,7 +2503,8 @@ export class TelegramBridge {
             this.ctx.logger.warn('[telegram] embedding media in the result failed, sending them separately: %s', messageOf(error))
           }
         }
-        await this.client.sendRichMessage(chat.chatId, text, signal)
+        const sent = await this.client.sendRichMessage(chat.chatId, text, signal)
+        this.ctx.logger.info('[telegram] result delivered: session=%s message=%d', chat.sessionId, sent.message_id)
       })
       return uploaded ? 'embedded' : 'plain'
     } catch (error) {

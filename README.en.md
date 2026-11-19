@@ -2,7 +2,7 @@
 
 [Русский](README.md)
 
-A fork of [IgnatAi401/dsh-telegram](https://github.com/IgnatAi401/dsh-telegram) for ordinary private-chat conversations. Version 0.5.0 targets DSH **0.2.2-rc.5** and Node **24.9+**. It remains a native Cordis plugin using DSH's Session Controller and storage domain, with no separate gateway or runner.
+A fork of [IgnatAi401/dsh-telegram](https://github.com/IgnatAi401/dsh-telegram) for ordinary private-chat conversations. Version 0.5.1 targets DSH **0.2.2-rc.5** and Node **24.9+**. It remains a native Cordis plugin using DSH's Session Controller and storage domain, with no separate gateway or runner.
 
 Install a qualified commit with `dsh plugin --profile web add github:FerrPOINT/dsh-telegram#<commit>`. The profile must provide session, workspace, storage-domain, model and agent-preset services. Register a workspace and configure its absolute path:
 
@@ -25,6 +25,12 @@ Send text, images or files directly. A new chat creates its own conversation in 
 - `/stats`, `/compact`, `/resend`, `/help`: statistics, compaction, resend and help.
 
 `/menu` is optional advanced control. Ordinary chatting and text-based conversation selection require no widget menu. Advanced upstream panels, questions and approvals use Telegram widgets.
+
+## Goal notifications
+
+Committed goal creation, blocking, pause, resume, completion and removal produce standalone persistent Telegram messages. Blocking includes the recorded reason and asks for explicit resumption after resolving it. Notices enter the existing chat delivery queue immediately, independently of turn completion or the model's closing answer. Objective edits stay quiet; reopening a session does not replay old notices. The plugin observes goal state without changing the execution policy. DSH also requires explicit resumption to rearm automatic continuation after a process restart.
+
+Notices share the existing result cache and `/resend` behavior with answers: only the latest attempted output is retained, and later output replaces it. Unknown transport outcomes are not automatically retried. Successful Bot API acceptance is logged with the Telegram message ID, session ID, and goal revision/operation; the objective, blocker text and bot token are excluded. API acceptance does not prove that a person read the message.
 
 ## Persistence and upgrade from 0.4
 
