@@ -17,7 +17,7 @@ set -euo pipefail
 ACTION="${1:-install}"
 REQUESTED="${2:-${DSH_TELEGRAM_PROFILE:-}}"
 PACKAGE=dsh-telegram
-REMOTE_SPEC=github:IgnatAi401/dsh-telegram
+REMOTE_SPEC=github:FerrPOINT/dsh-telegram
 DESKTOP_APP='DeepSeek Harness'
 if [ "$#" -gt 2 ] || { [ "$ACTION" != install ] && [ "$ACTION" != uninstall ]; }; then
   echo 'usage: bash install.sh [install|uninstall] [profile]' >&2

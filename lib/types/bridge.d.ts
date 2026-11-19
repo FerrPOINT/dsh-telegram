@@ -6,9 +6,14 @@
  * @module telegram/bridge
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { TelegramChatDomain } from './chat-state.js';
 import type { TelegramClientLike } from './client.js';
 /** Options for {@link TelegramBridge}. */
 export interface TelegramBridgeOptions {
+    /** Durable chat selections owned by the plugin's DSH storage domain. */
+    bindings: TelegramChatDomain;
+    /** Registered workspace used when an authorized private chat has no saved selection. */
+    workspacePath: string;
     /** Bot token from @BotFather. */
     token: string;
     /** User ids allowed to talk to the bot; empty means none unless `allowAllUsers`. */
@@ -42,6 +47,9 @@ export declare class TelegramBridge {
     private readonly preset;
     private readonly sleep;
     private readonly resultCache;
+    private readonly bindings;
+    private readonly workspacePath;
+    private readonly botId;
     private readonly chats;
     private readonly chatsBySession;
     private readonly collections;
@@ -72,7 +80,7 @@ export declare class TelegramBridge {
      */
     constructor(ctx: Context, options: TelegramBridgeOptions);
     /** Register DSH listeners, publish the command list, and start polling. */
-    start(): void;
+    start(): Promise<void>;
     /** Stop polling and release Telegram state; DSH sessions and Agents keep running. */
     stop(): Promise<void>;
     private stopImpl;
@@ -130,6 +138,13 @@ export declare class TelegramBridge {
     private loadCatalog;
     /** Read one session's model route (falling back to the DSH default) and title. */
     private sessionStatus;
+    private selectionKey;
+    /** Resolve the saved workspace, or the configured workspace for a new private chat. */
+    private workspaceFor;
+    /** Restore a saved selection; only a genuinely new chat creates a new conversation. */
+    private ensureChat;
+    /** Reconnect authorized chats before accepting updates; no conversation is created at startup. */
+    private restoreChats;
     private stateFor;
     /** The chat bound to an Agent's session, if any. */
     private boundChat;
@@ -140,6 +155,8 @@ export declare class TelegramBridge {
     /** Bind this chat to an existing session, unarchiving it first when needed. */
     private openSession;
     private bind;
+    /** Install only process-local delivery state after a durable selection has been established. */
+    private activate;
     /**
      * Register `telegram_widget` in the Agent's own scope, so only sessions bound
      * to a Telegram chat see it. A failure leaves the channel without the tool.

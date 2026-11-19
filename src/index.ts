@@ -19,15 +19,17 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import Schema from '@deepseek-ai/schemastery'
 import { TelegramBridge } from './bridge.js'
 import type { TelegramBridgeOptions } from './bridge.js'
+import { telegramChatDomain } from './chat-state.js'
+import type { TelegramChatDomain } from './chat-state.js'
 
 export * from './bridge.js'
 export * from './client.js'
 
 export const name = 'telegram'
-export const inject = ['agents', 'attachments', 'llm', 'sessionController', 'systemPrompt', 'workspaceRegistry']
+export const inject = ['agents', 'attachments', 'llm', 'sessionController', 'storageDomain', 'systemPrompt', 'workspaceRegistry']
 
 /** Telegram bridge deployment config. */
-export interface TelegramConfig extends Omit<TelegramBridgeOptions, 'token' | 'allowedUserIds' | 'allowAllUsers'> {
+export interface TelegramConfig extends Omit<TelegramBridgeOptions, 'token' | 'allowedUserIds' | 'allowAllUsers' | 'bindings'> {
   /** Bot token, edited on the Plugins page; empty falls back to the `TELEGRAM_BOT_TOKEN` env var. */
   token: Volatile<string | undefined>
   /** Allowed Telegram user ids, edited on the Plugins page; empty falls back to `TELEGRAM_ALLOWED_USER_IDS`. */
@@ -45,6 +47,7 @@ export const Config = Schema.object({
   pollingTimeoutSec: Schema.natural().min(1).default(30),
   apiBaseUrl: Schema.string().pattern(/^https?:\/\//),
   resultCacheDirectory: Schema.string().min(1),
+  workspacePath: Schema.string().min(1).required(),
 })
 
 // Settings from releases before the Plugins page: DSH 0.2.1-rc.2 refuses any `DSH_`-prefixed
@@ -82,7 +85,7 @@ function envAllowAllUsers(): boolean {
 }
 
 /** Build a bridge from the current settings, or undefined while no token is configured. */
-function createBridge(ctx: Context, config: TelegramConfig): TelegramBridge | undefined {
+function createBridge(ctx: Context, config: TelegramConfig, bindings: TelegramChatDomain): TelegramBridge | undefined {
   const token = config.token.get()?.trim() || readEnv(TOKEN_ENV)?.value
   if (!token) {
     ctx.logger.warn('[telegram] no bot token configured; fill it in on the DSH Plugins page (dsh-telegram → telegram)')
@@ -95,7 +98,7 @@ function createBridge(ctx: Context, config: TelegramConfig): TelegramBridge | un
   }
   const allowAllUsers = config.allowAllUsers ?? envAllowAllUsers()
   const { token: _token, allowedUserIds: _ids, ...rest } = config
-  return new TelegramBridge(ctx, { ...rest, token, allowedUserIds, allowAllUsers })
+  return new TelegramBridge(ctx, { ...rest, token, allowedUserIds, allowAllUsers, bindings })
 }
 
 /**
@@ -105,30 +108,40 @@ function createBridge(ctx: Context, config: TelegramConfig): TelegramBridge | un
  * @param config - deployment config.
  */
 export function apply(ctx: Context, config: TelegramConfig): void {
-  let bridge: TelegramBridge | undefined
-  // Serializes restarts: the old bridge stops polling before the next one starts,
-  // since Telegram refuses two concurrent getUpdates calls for one token.
-  let pending: Promise<void> = Promise.resolve()
-  let disposed = false
-  ctx.effect(() => {
-    bridge = createBridge(ctx, config)
-    bridge?.start()
-    return () => {
+  ctx.effect(async () => {
+    const bindings = await ctx.storageDomain.open(telegramChatDomain)
+    let bridge: TelegramBridge | undefined
+    let pending: Promise<void> = Promise.resolve()
+    let disposed = false
+    try {
+      bridge = createBridge(ctx, config, bindings)
+      await bridge?.start()
+      ctx.on('loader/volatile-update', () => {
+        const update = pending.then(async () => {
+          await bridge?.stop()
+          bridge = undefined
+          if (disposed) return
+          bridge = createBridge(ctx, config, bindings)
+          await bridge?.start()
+        })
+        pending = update.catch(error => {
+          ctx.logger.error('[telegram] restart failed: %s', error instanceof Error ? error.message : String(error))
+        })
+        return update
+      })
+    } catch (error) {
+      await bridge?.stop()
+      await bindings.close()
+      throw error
+    }
+    return async () => {
       disposed = true
-      return pending.then(() => bridge?.stop())
+      try {
+        await pending
+      } finally {
+        try { await bridge?.stop() }
+        finally { await bindings.close() }
+      }
     }
   }, 'telegram.serve')
-  ctx.on('loader/volatile-update', () => {
-    pending = pending.then(async () => {
-      await bridge?.stop()
-      bridge = undefined
-      if (disposed) return
-      try {
-        bridge = createBridge(ctx, config)
-        bridge?.start()
-      } catch (error) {
-        ctx.logger.error('[telegram] restart failed: %s', error instanceof Error ? error.message : String(error))
-      }
-    })
-  })
 }

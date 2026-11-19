@@ -1,47 +1,35 @@
 # DSH Telegram
 
-[简体中文](README.md)
+[Русский](README.md)
 
-A Telegram bot plugin for DeepSeek Harness, for both the command-line version (Linux / WSL2 / macOS) and Desktop. Chat with agents and send images and files in private Telegram chats, sharing workspaces and sessions with the Web UI.
+A fork of [IgnatAi401/dsh-telegram](https://github.com/IgnatAi401/dsh-telegram) for ordinary private-chat conversations. Version 0.5.0 targets DSH **0.2.2-rc.5** and Node **24.9+**. It remains a native Cordis plugin using DSH's Session Controller and storage domain, with no separate gateway or runner.
 
-Developed against **DeepSeek Harness v0.2.2-rc.2** and installed through DSH's own `dsh plugin` command.
+Install a qualified commit with `dsh plugin --profile web add github:FerrPOINT/dsh-telegram#<commit>`. The profile must provide session, workspace, storage-domain, model and agent-preset services. Register a workspace and configure its absolute path:
 
-## Install
-
-Run in a terminal (stop a running command-line DSH first):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/IgnatAi401/dsh-telegram/main/install.sh | bash
+```yaml
+- id: telegram
+  config:
+    workspacePath: /opt/dev
+    preset: standard
 ```
 
-The script finds Desktop and the command-line version on this machine and installs into each; on macOS a running Desktop is quit and reopened once the plugin is in place. The command-line version needs Node.js 22.19+ or 24+; if Desktop's dsh command is not found, install it first from the app menu (Manage dsh command…).
+Configure the token and allowlist through the plugin settings or a protected profile configuration. Only authorized private chats are admitted; never run two pollers with the same token.
 
-Windows Desktop: on the app's Plugins page choose Add plugin and enter `github:IgnatAi401/dsh-telegram`. For the command-line version on Windows, install inside WSL2 as above.
+## Chat and sessions
 
-## Configure and use
+Send text, images or files directly. A new chat creates its own conversation in the configured workspace; later messages resume its durable selection, including after DSH restarts and token rotation for the same bot.
 
-1. In Telegram, message @BotFather to create a bot and copy its token; message @userinfobot to see your numeric user ID.
-2. Start DSH (open the Desktop app, or run `npx @deepseek-ai/dsh web`), open Plugins → dsh-telegram, fill in the bot token and the allowed user IDs (comma-separated), and Save. The settings apply at once, without a restart.
-3. Configure model credentials and create a workspace in the Web UI, then open a private chat with the bot:
+- `/new`: start a clean conversation and retain the previous history.
+- `/sessions [page]`: list saved conversations.
+- `/resume ID`: continue a saved conversation in the selected workspace.
+- `/stats`, `/compact`, `/resend`, `/help`: statistics, compaction, resend and help.
 
-- `/menu`: select a workspace, create, open or archive sessions, and switch models and reasoning effort.
-- `/help`: list available commands.
-- Send text, images, or files to start chatting.
+`/menu` is optional advanced control. Ordinary chatting and text-based conversation selection require no widget menu. Advanced upstream panels, questions and approvals use Telegram widgets.
 
-The control panel, questions and approvals are drawn as Telegram widgets, which need a recent Telegram app with widget support.
+## Persistence and upgrade from 0.4
 
-Only private chats and allowed users are supported. Do not run multiple bot processes with the same token. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_IDS` in `~/.dsh/.env` from earlier releases still work; values saved on the Plugins page take precedence.
+DSH domain `telegram_chats`, version 1, owns table `chats`. Keys are `<bot-id>_<private-chat-id>`; records contain `workspaceId` and nullable `sessionId`. Message history stays in DSH session logs; tokens and transient widget state are never stored in this domain. Writes complete before active selection changes; stop retains the durable selection. Restoration enforces the current allowlist. An unavailable saved reference is reported explicitly and never replaced with another conversation implicitly.
 
-## Update
+`workspacePath` is now required. Version 0.4 held selections only in memory. To preserve a known former conversation, migrate its workspace/session IDs to this domain before startup, or choose it using `/sessions` and `/resume`. For the JSON backend the document is `<DSH_HOME>/storages/telegram_chats.json`; use the current storage-domain format without overwriting existing records.
 
-Run the install command again; your settings are kept. For a local checkout, `git pull` first and then run `bash install.sh`.
-
-## Uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/IgnatAi401/dsh-telegram/main/install.sh | bash -s -- uninstall
-```
-
-On Windows Desktop, uninstall from the Plugins page. Uninstalling also removes the Telegram settings saved on the Plugins page; DSH, model settings, workspaces, and history are preserved.
-
-To manage a single profile, append its name, for example `bash -s -- install desktop`; from a checkout run `bash install.sh [install|uninstall] [profile]`.
+Run `pnpm install --frozen-lockfile`, `pnpm run typecheck` and `pnpm run build`. The deployment integration check runs the real DSH and plugin with only Telegram/model API fixtures, covering ordinary messages, restart restoration, `/new` isolation, `/resume`, authorization and typing renewal. Original copyright and license are retained in [LICENSE](LICENSE).

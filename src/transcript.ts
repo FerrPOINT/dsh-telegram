@@ -52,7 +52,7 @@ export function richBody(text: string): string {
 
 /** Whether a `<details>` summary is the process fold that {@link TelegramTranscript.render} writes. */
 export function isProcessSummary(summary: string): boolean {
-  return /^\d+ 次工具调用 · \d+ 条消息$/.test(summary.trim())
+  return /^Инструменты: \d+ · Сообщения: \d+$/.test(summary.trim())
 }
 
 /** Retain visible assistant messages and counts only, never reasoning or tool payloads. */
@@ -85,10 +85,10 @@ export class TelegramTranscript {
     const intermediate = this.messages.filter(message => message.text.trim()
       && (final === undefined || message.step < final.step))
     if (!this.tools && !intermediate.length) return ''
-    const summary = `${this.tools} 次工具调用 · ${intermediate.length} 条消息`
+    const summary = `Инструменты: ${this.tools} · Сообщения: ${intermediate.length}`
     // Keep Markdown at the top level inside details so tables, formulas and
     // code remain native; separators distinguish messages without extra labels.
     const body = intermediate.map(message => richBody(message.text)).join('\n\n---\n\n')
-    return `<details><summary>${escapeHtml(summary)}</summary>\n\n${body || '暂无中间消息。'}\n\n</details>`
+    return `<details><summary>${escapeHtml(summary)}</summary>\n\n${body || 'Промежуточных сообщений нет.'}\n\n</details>`
   }
 }

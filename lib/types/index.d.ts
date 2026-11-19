@@ -20,7 +20,7 @@ export * from './client.js';
 export declare const name = "telegram";
 export declare const inject: string[];
 /** Telegram bridge deployment config. */
-export interface TelegramConfig extends Omit<TelegramBridgeOptions, 'token' | 'allowedUserIds' | 'allowAllUsers'> {
+export interface TelegramConfig extends Omit<TelegramBridgeOptions, 'token' | 'allowedUserIds' | 'allowAllUsers' | 'bindings'> {
     /** Bot token, edited on the Plugins page; empty falls back to the `TELEGRAM_BOT_TOKEN` env var. */
     token: Volatile<string | undefined>;
     /** Allowed Telegram user ids, edited on the Plugins page; empty falls back to `TELEGRAM_ALLOWED_USER_IDS`. */
@@ -36,6 +36,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     pollingTimeoutSec: Schema<number, number, "defined">;
     apiBaseUrl: Schema<string, string, "plain">;
     resultCacheDirectory: Schema<string, string, "plain">;
+    workspacePath: Schema<string, string, "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     token: Schema<string, string, "volatile">;
     allowedUserIds: Schema<NoInfer<number[]>, NoInfer<number[]>, "volatile-defined">;
@@ -44,6 +45,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     pollingTimeoutSec: Schema<number, number, "defined">;
     apiBaseUrl: Schema<string, string, "plain">;
     resultCacheDirectory: Schema<string, string, "plain">;
+    workspacePath: Schema<string, string, "defined">;
 }>>, "plain">;
 /**
  * Start the Telegram bridge and restart it whenever the token or allowlist

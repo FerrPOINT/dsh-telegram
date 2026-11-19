@@ -7,8 +7,8 @@ import { escapeHtml } from './format.js'
 import { withLocalMediaPlaceholders } from './media.js'
 import { richBody, TelegramTranscript } from './transcript.js'
 
-const LONG_PREVIEW = '回复较长，完整内容将在生成完成后显示。'
-const FOLD_PREVIEW = '折叠内容将在生成完成后显示。'
+const LONG_PREVIEW = 'Ответ большой. Полный текст появится после завершения.'
+const FOLD_PREVIEW = 'Полное содержимое появится после завершения.'
 
 /**
  * Shortest time from the start of one draft update to the start of the next.
@@ -65,7 +65,7 @@ export class TelegramProgress {
   /** The latest message without tool calls, previewed until the turn goes on. */
   private answer = ''
   private previewOverflow = false
-  private phase = '正在思考'
+  private phase = 'Обдумываю'
   private readonly activeTools = new Set<string>()
   private readonly transcript = new TelegramTranscript()
   private paused = false
@@ -103,7 +103,7 @@ export class TelegramProgress {
       this.attempt = frame.attemptId
       this.text = ''
       this.previewOverflow = false
-      this.phase = '正在思考'
+      this.phase = 'Обдумываю'
       this.changed()
     } else if (frame.attemptId === this.attempt && frame.type === 'chunk') {
       if (frame.chunk.type === 'text-delta') {
@@ -115,18 +115,18 @@ export class TelegramProgress {
             this.text = ''
           } else this.text += frame.chunk.text
         }
-        this.phase = '正在生成回复'
+        this.phase = 'Готовлю ответ'
       } else if (frame.chunk.type === 'reasoning-delta') {
-        this.phase = '正在思考'
+        this.phase = 'Обдумываю'
       } else if (frame.chunk.type === 'tool-call-delta') {
-        this.phase = '正在准备工具调用'
+        this.phase = 'Готовлю вызов инструмента'
       } else return
       this.changed()
     } else if (frame.attemptId === this.attempt && frame.type === 'end'
       && (frame.outcome.kind === 'abandoned' || frame.outcome.eventType === 'assistant/attempt')) {
       this.text = ''
       this.previewOverflow = false
-      this.phase = '正在等待重试'
+      this.phase = 'Ожидаю повторного запроса'
       this.changed()
     }
   }
@@ -149,17 +149,17 @@ export class TelegramProgress {
       this.changed()
     } else if (event.type === 'tool/call') {
       this.activeTools.add(event.data.callId)
-      this.phase = '正在执行工具'
+      this.phase = 'Выполняю инструменты'
       this.changed()
     } else if (event.type === 'tool/result') {
       this.activeTools.delete(event.data.message.toolCallId)
-      this.phase = this.activeTools.size ? '正在执行工具' : '正在整理工具结果'
+      this.phase = this.activeTools.size ? 'Выполняю инструменты' : 'Обрабатываю результаты'
       this.changed()
     } else if (event.type === 'step/start') {
       this.flushAnswer()
       this.text = ''
       this.previewOverflow = false
-      this.phase = `正在思考 · 第 ${event.data.step} 步`
+      this.phase = `Обдумываю · шаг ${event.data.step}`
       this.changed()
     }
   }
@@ -240,12 +240,12 @@ export class TelegramProgress {
   /** A terminal message clears a tool-only/failed draft even without an assistant answer. */
   terminalNotice(reason: string): string | undefined {
     if (this.stoppedByUser) return undefined
-    if (reason === 'completed') return this.transcript.answer.trim() ? undefined : '✅ **任务已完成**'
-    if (reason === 'aborted' || reason === 'interrupted') return '⏹ **任务已中断**'
-    if (reason === 'error') return '⚠️ **任务执行失败**，请检查 dsh 日志。'
-    if (reason === 'blocked') return '⚠️ **任务暂时无法继续**'
-    if (reason === 'max-tokens') return '⚠️ **输出已达到长度限制**'
-    return 'ℹ️ **任务已结束**'
+    if (reason === 'completed') return this.transcript.answer.trim() ? undefined : '✅ Задача выполнена.'
+    if (reason === 'aborted' || reason === 'interrupted') return '⏹ Задача остановлена.'
+    if (reason === 'error') return '⚠️ Не удалось выполнить задачу. Проверьте журнал DSH.'
+    if (reason === 'blocked') return '⚠️ Выполнение задачи заблокировано.'
+    if (reason === 'max-tokens') return '⚠️ Достигнут предел длины ответа.'
+    return 'ℹ️ Задача завершена.'
   }
 
   /**
@@ -261,7 +261,7 @@ export class TelegramProgress {
   }
 
   private status(): string {
-    return `${this.phase} · ${Math.floor((Date.now() - this.started) / 1000)} 秒`
+    return `${this.phase} · ${Math.floor((Date.now() - this.started) / 1000)} с`
   }
 
   private schedule(): void {

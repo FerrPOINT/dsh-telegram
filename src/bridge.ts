@@ -24,6 +24,7 @@ import type {
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
+import type { TelegramChatDomain } from './chat-state.js'
 import { randomInt, randomUUID } from 'node:crypto'
 import { openAsBlob } from 'node:fs'
 import { mkdir, open, realpath, stat } from 'node:fs/promises'
@@ -54,6 +55,10 @@ import type { WidgetSendRequest, WidgetUpdateRequest } from './widget.js'
 
 /** Options for {@link TelegramBridge}. */
 export interface TelegramBridgeOptions {
+  /** Durable chat selections owned by the plugin's DSH storage domain. */
+  bindings: TelegramChatDomain
+  /** Registered workspace used when an authorized private chat has no saved selection. */
+  workspacePath: string
   /** Bot token from @BotFather. */
   token: string
   /** User ids allowed to talk to the bot; empty means none unless `allowAllUsers`. */
@@ -275,75 +280,23 @@ const FOLLOWUP_HELP = [
   '- 收集模式中单独发送 `/followup`，会提交全部收集内容。',
 ].join('\n')
 
-const HELP_TEXT = [
-  '# 📖 命令帮助',
-  '',
-  '## 会话管理',
-  '',
-  '| 命令 | 作用 |',
-  '| :--- | :--- |',
-  '| /menu | 打开控制面板 |',
-  '| /new | 在当前工作区新建会话 |',
-  '| /archive | 归档当前会话，保留聊天记录 |',
-  '| /stats | 查看当前会话的用时、Token 与上下文统计 |',
-  '| /compact | 立即压缩当前会话的上下文 |',
-  '',
-  '## 收集与排队',
-  '',
-  '| 命令 | 作用 |',
-  '| :--- | :--- |',
-  '| /collect | 开始收集文字、图片和文件 |',
-  '| /send | 提交收集内容，可附加文字 |',
-  '| /discard | 放弃本次收集 |',
-  '| /followup | 将内容排到当前任务之后 |',
-  '',
-  '**排队示例**',
-  '',
-  '```text',
-  '/followup 完成后请总结修改内容',
-  '```',
-  '',
-  '收集模式中单独发送 `/followup`，即可提交全部收集内容。',
-  '',
-  '---',
-  '',
-  '## 发送与停止',
-  '',
-  '- **空闲时**：发送消息开启任务。',
-  '- **运行中**：发送消息作为插话。',
-  '- **图片与文件**：可附带说明，多段内容可先使用 /collect。文件下载上限为 20 MiB。',
-  '- **Agent 交付的文件**：在结果之后单独发送，单个文件上限 50 MB。',
-  '- **停止任务**：点击 Telegram 生成预览上的停止按钮。',
-  '',
-  '## 回答 Agent',
-  '',
-  '点击选项或发送自定义回答；/skip 跳过当前问题，/cancel 取消整次提问。',
-  '',
-  '---',
-  '',
-  '| 其他命令 | 作用 |',
-  '| :--- | :--- |',
-  '| /start | 确认 Bot 在线 |',
-  '| /help | 显示本页 |',
-  '| /resend | 重发最后一份完整结果 |',
-  '',
-  '每个聊天保留最后一份完整结果，发送成功后仍可重发，新结果会覆盖旧缓存。',
-].join('\n')
 
 /** Slash-command list registered with Telegram via setMyCommands. */
 const MY_COMMANDS = [
-  { command: 'menu', description: '打开控制面板' },
-  { command: 'start', description: '确认机器人在线' },
-  { command: 'new', description: '在当前工作区新建会话' },
-  { command: 'archive', description: '归档当前会话，保留聊天记录' },
-  { command: 'stats', description: '查看当前会话统计' },
-  { command: 'compact', description: '压缩当前会话的上下文' },
-  { command: 'collect', description: '收集文字、图片与文件' },
-  { command: 'send', description: '提交收集内容' },
-  { command: 'discard', description: '放弃本次收集' },
-  { command: 'followup', description: '将消息排到当前任务之后' },
-  { command: 'resend', description: '重发最后一份完整结果' },
-  { command: 'help', description: '查看使用帮助' },
+  { command: 'sessions', description: 'Сохранённые разговоры' },
+  { command: 'resume', description: 'Продолжить сохранённый разговор' },
+  { command: 'menu', description: 'Дополнительные настройки' },
+  { command: 'start', description: 'Проверить доступность бота' },
+  { command: 'new', description: 'Начать новый разговор' },
+  { command: 'archive', description: 'Архивировать разговор, сохранив историю' },
+  { command: 'stats', description: 'Статистика разговора' },
+  { command: 'compact', description: 'Сжать контекст разговора' },
+  { command: 'collect', description: 'Собрать текст, изображения и файлы' },
+  { command: 'send', description: 'Отправить собранные сообщения' },
+  { command: 'discard', description: 'Отменить сбор сообщений' },
+  { command: 'followup', description: 'Поставить сообщение в очередь' },
+  { command: 'resend', description: 'Повторить последний полный ответ' },
+  { command: 'help', description: 'Помощь' },
 ]
 
 // Floor between polls so an instant-empty transport cannot hot-loop the
@@ -394,19 +347,19 @@ const TELEGRAM_CHANNEL_PROMPT = [
   "- 原生按钮用 <tg-button>，按钮行用 <tg-button-row align=\"left|center|right\">。可使用 type=\"url\" 搭配 url、type=\"copy_text\" 搭配 text，或 type=\"disabled\"；样式为 primary、success、danger、link。按钮只用于两种情况：需要一键复制的内容（命令、单号、地址等，Telegram 代码块不能直接复制，copy_text 的 text 最长 256 字符），或回复只有一个必须打开的目标页面（type=\"url\"）；其余用正文链接。",
   "- callback_data、web_app、login_url、switch_inline_query、switch_inline_query_current_chat、switch_inline_query_chosen_chat 按钮语法会原样传给 Telegram，但需要真实应用、域名或后端处理。当前插件只处理自己的菜单和提问按钮；不要生成自定义业务回调或承诺点击能执行工具。需要用户回答时使用已有 ask_user_question 工具。",
   ...WIDGET_PROMPT_LINES,
-  "- 用户可在 Telegram 发送 /menu 打开控制面板（小组件形式）：切换工作区和会话、选择模型和推理强度、查看任务状态和上下文占用；/new 新建会话，/stats 查看会话统计，/compact 压缩上下文，/resend 重发最后一份完整结果。用户想切换模型、会话或查看用量时，告诉他们用这些命令，不要尝试自己修改。ask_user_question 的提问和权限审批也会以面板形式显示，用户点选作答。",
+  "- Ordinary Telegram messages automatically continue the saved DSH conversation; never require /menu before chatting. /new starts a clean conversation while retaining history. /sessions lists saved conversations; /resume ID continues one. /stats shows usage, /compact compacts context, and /resend repeats the last complete result. /menu is optional advanced control, not a prerequisite. Agent questions can be answered directly with text.",
   "- <tg-thinking> 由插件在草稿中插入，不要输出。插件会把中间消息放进外层折叠记录，正文无需重复过程。",
   "- 富消息上限为 32768 个 UTF-8 字符、500 个块（含嵌套列表项及表格行）、16 层嵌套、50 个媒体、20 列表格。每条回复正文尽量少于 30000 字符，为插件运行记录留空间；超长内容应组织为精简回复和用 present 发送的文件。插件不截断最终答案、不转普通文本、不拆坏公式或脚注；超限或不支持的服务会明确记入发送失败日志。",
 ].join('\n')
 
 /** Chinese wording for DSH's `ManualCompactionError` codes, matching the `/compact` command's outcomes. */
 const COMPACTION_FAILURES: Record<string, string> = {
-  busy: '会话正忙：任务正在运行，或已有压缩正在进行。请稍后再试。',
-  cancelled: '压缩已取消。',
-  changed: '压缩期间所选历史发生了变化，本次没有替换；尝试记录已写入会话日志。',
-  summary: '未能生成有效的摘要；尝试记录已写入会话日志。',
-  commit: '压缩没有干净地完成，部分会话历史可能已改变。请先检查会话状态再重试。',
-  persistence: '压缩已完成，但会话保存失败。',
+  busy: 'Разговор занят: выполняется задача или сжатие контекста. Повтори позже.',
+  cancelled: 'Сжатие отменено.',
+  changed: 'История изменилась во время сжатия и не была заменена. Попытка записана в журнал.',
+  summary: 'Не удалось составить резюме. Попытка записана в журнал.',
+  commit: 'Сжатие не завершилось корректно. Часть истории могла измениться; проверь состояние разговора перед повтором.',
+  persistence: 'Контекст сжат, но сохранить разговор не удалось.',
 }
 
 /** Room left for the compaction notice inside one 32768-character rich message. */
@@ -421,17 +374,6 @@ const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
   'image/gif': '.gif',
 }
 
-/** Playful online acknowledgements from a reluctant but dependable assistant. */
-const START_MESSAGES = [
-  '在啦在啦，刚想摸会儿鱼就被你发现了。说吧，今天要我帮什么忙？',
-  '哼，当然在线。才不是专门等你，只是还没找到合适的偷懒时机。',
-  '唔……五分钟的休息计划泡汤了。把任务拿来吧，做完我还要继续躺着呢。',
-  '收到啦，不用再戳了。麻烦事交给我，你把要求说清楚就好……才不是在照顾你。',
-  '我在。先说好，能一步做完的事不许让我跑三趟，省下来的时间我要拿去摸鱼。',
-  '被你叫醒了……好吧，这次也帮你。可不是因为特别想干活哦。',
-  '在线，正在认真研究如何少干活。嗯？有任务？那就先把你的事做好再研究。',
-  '哼，你来得倒挺准，刚好赶上我准备休息。说吧说吧，帮完这次再偷懒。',
-] as const
 
 /** A stable message string for logging, whatever the thrown shape. */
 function messageOf(error: unknown): string {
@@ -631,8 +573,8 @@ function foldedCompactionSummary(summary: readonly ContentBlock[]): string {
   if (text === '') return ''
   const long = text.length > MAX_COMPACTION_SUMMARY_LENGTH
   const body = richBody(long ? truncateText(text, MAX_COMPACTION_SUMMARY_LENGTH) : text)
-  const note = long ? '\n\n---\n\n*摘要过长，已截断；完整内容保存在 DSH 会话历史中。*' : ''
-  return `<details><summary>压缩摘要</summary>\n\n${body}${note}\n\n</details>`
+  const note = long ? '\n\n---\n\n*Резюме слишком длинное; полная версия сохранена в истории DSH.*' : ''
+  return `<details><summary>Резюме контекста</summary>\n\n${body}${note}\n\n</details>`
 }
 
 /** Session title with its id, or the id alone while untitled. */
@@ -654,6 +596,9 @@ export class TelegramBridge {
   private readonly preset: string | undefined
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>
   private readonly resultCache: TelegramResultCache
+  private readonly bindings: TelegramChatDomain
+  private readonly workspacePath: string
+  private readonly botId: string
   private readonly chats = new Map<number, ChatState>()
   private readonly chatsBySession = new Map<string, ActiveChatSession>()
   private readonly collections = new Map<number, TelegramCollection>()
@@ -684,6 +629,7 @@ export class TelegramBridge {
    * @param options - bridge options.
    */
   constructor(ctx: Context, options: TelegramBridgeOptions) {
+    if (!isAbsolute(options.workspacePath)) throw new Error('telegram: workspacePath must be absolute')
     if (options.pollingTimeoutSec !== undefined
       && (!Number.isSafeInteger(options.pollingTimeoutSec) || options.pollingTimeoutSec < 1)) {
       throw new RangeError('telegram: pollingTimeoutSec must be a positive integer')
@@ -693,6 +639,9 @@ export class TelegramBridge {
       throw new RangeError('telegram: allowedUserIds must contain only positive safe integers')
     }
     this.ctx = ctx
+    this.bindings = options.bindings
+    this.workspacePath = resolve(options.workspacePath)
+    this.botId = options.token.split(':')[0]!
     this.client = options.client ?? new TelegramClient(options.token, {
       ...(options.pollingTimeoutSec === undefined ? {} : { pollingTimeoutSec: options.pollingTimeoutSec }),
       ...(options.apiBaseUrl === undefined ? {} : { baseUrl: options.apiBaseUrl }),
@@ -708,7 +657,7 @@ export class TelegramBridge {
   }
 
   /** Register DSH listeners, publish the command list, and start polling. */
-  start(): void {
+  async start(): Promise<void> {
     if (this.started || this.stopped) return
     this.started = true
     const ctx = this.ctx
@@ -740,6 +689,7 @@ export class TelegramBridge {
       // The Agent scope already unwound its registrations.
       ctx.on('agent/disposed', ({ agent }) => { this.widgetTools.delete(agent) }),
     )
+    await this.restoreChats()
     this.commandTask = this.registerCommands()
     this.pollTask = this.pollLoop()
   }
@@ -835,7 +785,7 @@ export class TelegramBridge {
     // ignoring groups keeps an allowed user from forwarding one to a private agent.
     if (message === undefined || message.chat.type !== 'private') return
     if (!this.authorizedUser(message.from)) {
-      await this.safeSend(message.chat.id, '⛔ **访问被拒绝**')
+      await this.safeSend(message.chat.id, '⛔ Доступ запрещён.')
       return
     }
     const chatId = message.chat.id
@@ -846,9 +796,13 @@ export class TelegramBridge {
       await this.handleCommand(chatId, parsed.command, parsed.argsText)
       return
     }
-    const active = this.chats.get(chatId)?.active
-    if (active === undefined) {
-      await this.safeSend(chatId, '⚠️ **尚未选择会话**\n\n发送 /menu，选择工作区和会话，或点击“新建会话”。')
+    if (message.text === undefined && message.document === undefined && message.photo === undefined
+      && message.reply_to_message === undefined) return
+    let active: ActiveChatSession
+    try {
+      active = await this.ensureChat(chatId)
+    } catch (error) {
+      await this.safeSend(chatId, `⚠️ Не удалось открыть разговор.\n\n${richCodeBlock(messageOf(error))}`)
       return
     }
     if (parsed?.command === '/followup') {
@@ -860,8 +814,6 @@ export class TelegramBridge {
       await this.addToCollection(active, collection, message)
       return
     }
-    if (message.text === undefined && message.document === undefined && message.photo === undefined
-      && message.reply_to_message === undefined) return
     await this.submitTelegramMessage(active, message, 'default')
   }
 
@@ -879,7 +831,7 @@ export class TelegramBridge {
     }
     if (command === '/cancel') {
       this.trackQuestionMessage(pending, message.message_id)
-      const noticeId = await this.safeSend(chatId, pending.approval ? '🚫 **已取消权限申请**' : '🚫 **已取消提问**')
+      const noticeId = await this.safeSend(chatId, pending.approval ? 'Запрос разрешения отменён.' : 'Вопрос отменён.')
       if (noticeId !== undefined) this.trackQuestionMessage(pending, noticeId)
       this.rejectPendingQuestion(pending, userQuestionError('ask_user_question was cancelled by the Telegram user', 'ASK_CANCELLED'))
       return true
@@ -890,7 +842,7 @@ export class TelegramBridge {
       return true
     }
     if (message.text === undefined) {
-      await this.safeSend(chatId, '❓ **还在等你回答**\n\n请在面板里选择，或发送一条文字；图片和文件不能作为回答。')
+      await this.safeSend(chatId, 'Ожидаю ответ на вопрос. Можно просто отправить текст; изображения и файлы не подходят для ответа.')
       return true
     }
     this.trackQuestionMessage(pending, message.message_id)
@@ -905,11 +857,41 @@ export class TelegramBridge {
   private async handleCommand(chatId: number, command: string, argsText: string): Promise<void> {
     switch (command) {
       case '/start':
-        await this.safeSend(chatId, `☕ **在线 · 摸鱼暂停**\n\n${START_MESSAGES[Math.floor(Math.random() * START_MESSAGES.length)]!}\n\n---\n\n/menu 打开控制面板 · /help 查看帮助`)
+        await this.safeSend(chatId, 'Бот готов. Просто отправь сообщение: сохранённый разговор продолжится автоматически. /new начинает новый разговор, /help показывает команды.')
         return
       case '/help':
-        await this.safeSend(chatId, HELP_TEXT)
+        await this.safeSend(chatId, 'Отправляй текст, изображения или файлы прямо в чат. Разговор сохраняется после перезапуска.\n\n/new — новый разговор; прежняя история сохраняется.\n/sessions — список сохранённых разговоров.\n/resume ID — продолжить выбранный разговор.\n/stats — состояние разговора.\n/compact — сжать контекст.\n/resend — повторить последний ответ.\n/menu — необязательные расширенные настройки.')
         return
+      case '/sessions': {
+        try {
+          const workspace = this.workspaceFor(chatId)
+          const active = this.chats.get(chatId)?.active
+          const catalog = await this.loadCatalog(active?.sessionId)
+          const sessions = catalog.find(entry => entry.workspace.id === workspace.id)?.sessions ?? []
+          const page = argsText === '' ? 1 : Number(argsText)
+          const pages = Math.max(1, Math.ceil(sessions.length / MENU_PAGE_SIZE))
+          if (!Number.isSafeInteger(page) || page < 1 || page > pages) throw new Error(`Укажите страницу от 1 до ${pages}: /sessions 1`)
+          const rows = sessions.slice((page - 1) * MENU_PAGE_SIZE, page * MENU_PAGE_SIZE).map(session =>
+            `${session.id === active?.sessionId ? 'Текущий: ' : ''}${richLiteral(session.title ?? 'Без названия')}${session.archived ? ' (архив)' : ''}\n${inlineCode(`/resume ${session.id}`)}`)
+          await this.safeSend(chatId, rows.length === 0 ? 'Сохранённых разговоров пока нет. Просто отправь сообщение.'
+            : `**Сохранённые разговоры · ${page}/${pages}**\n\n${rows.join('\n\n')}\n\n${page < pages ? `/sessions ${page + 1} — следующая страница` : '/new — новый разговор'}`)
+        } catch (error) {
+          await this.safeSend(chatId, `⚠️ ${richLiteral(messageOf(error))}`)
+        }
+        return
+      }
+      case '/resume': {
+        try {
+          const workspace = this.workspaceFor(chatId)
+          const sessionId = workspace.sessionIds.find(id => id === argsText.trim())
+          if (sessionId === undefined) throw new Error('Разговор не найден в текущей рабочей папке. Команда /sessions покажет доступные ID.')
+          const notice = await this.openSession(chatId, workspace, sessionId)
+          await this.safeSend(chatId, notice)
+        } catch (error) {
+          await this.safeSend(chatId, `⚠️ ${richLiteral(messageOf(error))}`)
+        }
+        return
+      }
       case '/menu':
         await this.showMenu(chatId)
         return
@@ -917,23 +899,19 @@ export class TelegramBridge {
         try {
           const sent = await this.resultCache.resend(chatId, text =>
             this.client.sendRichMessage(chatId, text, this.abortController.signal))
-          if (!sent) await this.safeSend(chatId, 'ℹ️ **没有可重发的结果**\n\n当前还没有缓存的完整结果。')
+          if (!sent) await this.safeSend(chatId, 'Сохранённого ответа для повторной отправки пока нет.')
         } catch (error) {
           this.ctx.logger.error('[telegram] cached result delivery failed: %s', messageOf(error))
-          await this.safeSend(chatId, '⚠️ **缓存结果补发失败**\n\n缓存仍保留，请稍后使用 /resend 重试。')
+          await this.safeSend(chatId, '⚠️ Не удалось повторить ответ. Он сохранён; попробуй /resend позже.')
         }
         return
       case '/new': {
-        const workspace = this.chats.get(chatId)?.workspace
-        if (workspace === undefined) {
-          await this.safeSend(chatId, '⚠️ **尚未选择工作区**\n\n请先打开 /menu 选择工作区和会话。')
-          return
-        }
         try {
+          const workspace = this.workspaceFor(chatId)
           const active = await this.createSession(chatId, workspace)
-          await this.safeSend(chatId, `✅ **已创建新会话**\n\n**工作区**：${richLiteral(workspace.title)}\n\n**会话编号**\n\n${richCodeBlock(active.sessionId)}`)
+          await this.safeSend(chatId, `Начат новый разговор в ${richLiteral(workspace.path)}. Предыдущая история сохранена.\n\n${inlineCode(active.sessionId)}`)
         } catch (error) {
-          await this.safeSend(chatId, `⚠️ **创建会话失败**\n\n${richCodeBlock(messageOf(error))}`)
+          await this.safeSend(chatId, `⚠️ Не удалось начать новый разговор. История не удалена.\n\n${richCodeBlock(messageOf(error))}`)
         }
         return
       }
@@ -941,16 +919,16 @@ export class TelegramBridge {
         try {
           const archived = await this.archiveCurrent(chatId)
           await this.safeSend(chatId, archived === undefined
-            ? 'ℹ️ **没有可归档的会话**'
-            : `📦 **已归档会话**\n\n${richCodeBlock(archived)}\n\n---\n\n聊天记录已保留，工作区仍保持选中；可使用 /new 创建新会话，或在 /menu 会话列表中重新打开已归档会话。`)
+            ? 'Активного разговора для архивации нет.'
+            : `📦 Разговор архивирован.\n\n${richCodeBlock(archived)}\n\n---\n\nИстория сохранена. /new начнёт новый разговор; /sessions и /resume позволяют вернуться к прежнему.`)
         } catch (error) {
-          await this.safeSend(chatId, `⚠️ **归档会话失败**\n\n${richCodeBlock(messageOf(error))}`)
+          await this.safeSend(chatId, `⚠️ Не удалось архивировать разговор.\n\n${richCodeBlock(messageOf(error))}`)
         }
         return
       case '/collect': {
         const active = this.chats.get(chatId)?.active
         if (active === undefined) {
-          await this.safeSend(chatId, '⚠️ **尚未选择会话**\n\n请先打开 /menu 选择或新建会话。')
+          await this.safeSend(chatId, 'Разговор ещё не создан. Просто отправь сообщение или используй /new.')
           return
         }
         const existing = this.collectionFor(active)
@@ -996,7 +974,7 @@ export class TelegramBridge {
         await this.startCompaction(chatId)
         return
       default:
-        await this.safeSend(chatId, `❔ **未知命令**\n\n${richLiteral(command)}\n\n发送 \`/help\` 查看可用命令。`)
+        await this.safeSend(chatId, `❔ Неизвестная команда.\n\n${richLiteral(command)}\n\nКоманда /help покажет список команд.`)
     }
   }
 
@@ -1013,7 +991,7 @@ export class TelegramBridge {
     const agent = active === undefined ? undefined : this.ctx.agents.get(active.sessionId)
     const running = agent?.status === 'running'
     if (active === undefined || (!running && pending === undefined)) {
-      await this.safeSend(chatId, 'ℹ️ **当前没有正在执行的任务**')
+      await this.safeSend(chatId, 'ℹ️ Сейчас нет выполняемой задачи.')
       return
     }
     // Kill the typing heartbeat first so Telegram's indicator expires instead of renewing.
@@ -1024,7 +1002,7 @@ export class TelegramBridge {
     }
     // Queued follow-ups are discarded too; the aborted turn never delivers its partial answer.
     if (running) agent.cancel({ kind: 'user' })
-    await this.enqueue(active, async () => { await this.safeSend(chatId, '⏹ **已中断当前任务**') })
+    await this.enqueue(active, async () => { await this.safeSend(chatId, '⏹ Текущая задача остановлена.') })
   }
 
   // --- Statistics and compaction ---------------------------------------------
@@ -1033,7 +1011,7 @@ export class TelegramBridge {
   private async sendStats(chatId: number): Promise<void> {
     const active = this.chats.get(chatId)?.active
     if (active === undefined) {
-      await this.safeSend(chatId, '⚠️ **尚未选择会话**\n\n请先打开 /menu 选择或新建会话。')
+      await this.safeSend(chatId, 'Разговор ещё не создан. Просто отправь сообщение или используй /new.')
       return
     }
     try {
@@ -1041,7 +1019,7 @@ export class TelegramBridge {
       const values = (await this.ctx.sessionController.projections({ sessionId: active.sessionId }, this.abortController.signal))?.values ?? {}
       await this.safeSend(chatId, formatSessionStats(values, sessionLabel(active.sessionId, displayTitle(values.title))))
     } catch (error) {
-      await this.safeSend(chatId, `⚠️ **读取会话统计失败**\n\n${richCodeBlock(messageOf(error))}`)
+      await this.safeSend(chatId, `⚠️ Не удалось прочитать статистику.\n\n${richCodeBlock(messageOf(error))}`)
     }
   }
 
@@ -1049,24 +1027,24 @@ export class TelegramBridge {
   private async startCompaction(chatId: number): Promise<void> {
     const active = this.chats.get(chatId)?.active
     if (active === undefined) {
-      await this.safeSend(chatId, '⚠️ **尚未选择会话**\n\n请先打开 /menu 选择或新建会话。')
+      await this.safeSend(chatId, 'Разговор ещё не создан. Просто отправь сообщение или используй /new.')
       return
     }
     const compaction = this.ctx.get('compaction') as CompactionServiceLike | undefined
     if (compaction === undefined) {
-      await this.safeSend(chatId, 'ℹ️ **当前 DSH 未启用上下文压缩**\n\n需要在 DSH 配置中挂载压缩插件，例如 `@deepseek-ai/dsh-compaction-basic`。')
+      await this.safeSend(chatId, 'Сжатие контекста не включено в этой конфигурации DSH.')
       return
     }
     if (this.compacting.has(chatId)) {
-      await this.safeSend(chatId, '🗜 **正在压缩上下文**\n\n请等待本次压缩完成。')
+      await this.safeSend(chatId, '🗜 Контекст уже сжимается. Дождись завершения.')
       return
     }
     if (this.ctx.workspaceRegistry.archivedSessionIds.includes(active.sessionId)) {
-      await this.safeSend(chatId, '⚠️ **当前会话已归档**\n\n请在 /menu 会话列表中重新打开它后再压缩。')
+      await this.safeSend(chatId, 'Разговор архивирован. Продолжи его через /resume перед сжатием.')
       return
     }
     if (this.ctx.agents.get(active.sessionId)?.status === 'running') {
-      await this.safeSend(chatId, '⚠️ **任务仍在运行**\n\n请等待完成或点击 Telegram 原生停止按钮后再压缩。')
+      await this.safeSend(chatId, 'Задача ещё выполняется. Дождись завершения или останови её кнопкой Telegram перед сжатием.')
       return
     }
     const controller = new AbortController()
@@ -1093,10 +1071,10 @@ export class TelegramBridge {
     const draft = (): void => {
       drafts = drafts.then(async () => {
         if (signal.aborted) return
-        const status = `正在压缩上下文 · ${Math.floor((Date.now() - started) / 1000)} 秒`
+        const status = `Сжимаю контекст · ${Math.floor((Date.now() - started) / 1000)} с`
         try {
           await this.client.sendRichMessageDraft(chatId, draftId,
-            `<tg-thinking>${escapeHtml(status)}</tg-thinking>\n\n模型正在为较早的历史生成摘要；期间发送的消息会在压缩完成后处理。`, signal)
+            `<tg-thinking>${escapeHtml(status)}</tg-thinking>\n\nМодель готовит резюме истории. Новые сообщения будут обработаны после завершения сжатия.`, signal)
         } catch (error) {
           if (!signal.aborted) this.ctx.logger.warn('[telegram] compaction preview failed: %s', messageOf(error))
         }
@@ -1110,15 +1088,15 @@ export class TelegramBridge {
       const agent = await this.resolveAgent(active.sessionId)
       const result = await compaction.compactNow(agent, signal)
       if (result === null) {
-        text = 'ℹ️ **暂无可压缩的历史**\n\n当前会话的历史太短，或没有可以安全压缩的部分。'
+        text = 'История пока слишком короткая для сжатия.'
       } else {
         const lines = [
-          '✅ **上下文压缩完成**',
-          `已将 ${result.shadowedSeqs.length} 条历史压缩为一条摘要，约释放 ${formatExactTokens(result.shadowedTokenCount)} tokens。`,
+          '✅ Контекст сжат.',
+          `Записей в резюме: ${result.shadowedSeqs.length}. Освобождено около ${formatExactTokens(result.shadowedTokenCount)} токенов.`,
         ]
         const occupancy = await this.contextOccupancyOf(active.sessionId)
         if (occupancy !== undefined) {
-          lines.push(`**上下文已用**：${occupancy.percent}%（约 ${formatTokens(occupancy.usedTokens)} / ${formatTokens(occupancy.contextWindow)}）`)
+          lines.push(`**Контекст использован на** ${occupancy.percent}% (около ${formatTokens(occupancy.usedTokens)} / ${formatTokens(occupancy.contextWindow)})`)
         }
         text = lines.join('\n\n')
         folded = foldedCompactionSummary(result.summary)
@@ -1126,12 +1104,12 @@ export class TelegramBridge {
     } catch (error) {
       if (this.stopped) return
       if (stop.aborted) {
-        text = '⏹ **已取消上下文压缩**'
+        text = '⏹ Сжатие контекста отменено.'
       } else {
         const known = (error as { name?: unknown } | null)?.name === 'ManualCompactionError'
           ? COMPACTION_FAILURES[errorCode(error) ?? ''] : undefined
         if (known === undefined) this.ctx.logger.error('[telegram] compaction failed: %s', messageOf(error))
-        text = `⚠️ **上下文压缩失败**\n\n${known ?? richCodeBlock(messageOf(error))}`
+        text = `⚠️ Не удалось сжать контекст.\n\n${known ?? richCodeBlock(messageOf(error))}`
       }
     } finally {
       clearInterval(timer)
@@ -1522,6 +1500,59 @@ export class TelegramBridge {
 
   // --- Session binding -------------------------------------------------------
 
+  private selectionKey(chatId: number): string {
+    return `${this.botId}_${chatId}`
+  }
+
+  /** Resolve the saved workspace, or the configured workspace for a new private chat. */
+  private workspaceFor(chatId: number): Workspace {
+    const saved = this.bindings.table('chats').get(this.selectionKey(chatId))
+    const workspace = saved === undefined
+      ? this.ctx.workspaceRegistry.list().find(item => resolve(item.path) === this.workspacePath)
+      : this.ctx.workspaceRegistry.get(saved.workspaceId)
+    if (workspace === undefined) throw new Error('Рабочая папка разговора недоступна. Проверьте workspacePath в настройках Telegram-плагина.')
+    return workspace
+  }
+
+  /** Restore a saved selection; only a genuinely new chat creates a new conversation. */
+  private async ensureChat(chatId: number): Promise<ActiveChatSession> {
+    const saved = this.bindings.table('chats').get(this.selectionKey(chatId))
+    const current = this.chats.get(chatId)?.active
+    if (current !== undefined) {
+      if (this.ctx.workspaceRegistry.archivedSessionIds.includes(current.sessionId)) {
+        throw new Error('Разговор архивирован. Команда /new начнёт новый; прежняя история сохранена.')
+      }
+      return current
+    }
+    const workspace = this.workspaceFor(chatId)
+    if (saved?.sessionId === undefined || saved.sessionId === null) return this.createSession(chatId, workspace)
+    if (!workspace.sessionIds.includes(saved.sessionId)
+      || this.ctx.workspaceRegistry.archivedSessionIds.includes(saved.sessionId)) {
+      throw new Error('Сохранённый разговор недоступен. Используйте /new для нового разговора; история не удаляется.')
+    }
+    const owner = this.chatsBySession.get(saved.sessionId)
+    if (owner !== undefined && owner.chatId !== chatId) throw new Error('Разговор уже используется другим Telegram-чатом.')
+    await this.resolveAgent(saved.sessionId)
+    return this.activate(chatId, workspace, saved.sessionId)
+  }
+
+  /** Reconnect authorized chats before accepting updates; no conversation is created at startup. */
+  private async restoreChats(): Promise<void> {
+    const prefix = `${this.botId}_`
+    for (const [key, saved] of this.bindings.table('chats').entries()) {
+      if (!key.startsWith(prefix) || saved.sessionId === null) continue
+      const chatId = Number(key.slice(prefix.length))
+      if (!Number.isSafeInteger(chatId) || chatId <= 0) throw new Error('Некорректный идентификатор сохранённого Telegram-чата.')
+      if (!this.allowAllUsers && !this.allowedUserIds.has(chatId)) continue
+      try {
+        await this.ensureChat(chatId)
+      } catch (error) {
+        this.ctx.logger.error('[telegram] conversation restoration failed: %s', messageOf(error))
+        await this.safeSend(chatId, `⚠️ Не удалось восстановить разговор.\n\n${richCodeBlock(messageOf(error))}`)
+      }
+    }
+  }
+
   private stateFor(chatId: number): ChatState {
     let state = this.chats.get(chatId)
     if (state === undefined) {
@@ -1545,7 +1576,7 @@ export class TelegramBridge {
 
   /** Create a session in `workspace` exactly as Web does and bind this chat to it. */
   private async createSession(chatId: number, workspace: Workspace): Promise<ActiveChatSession> {
-    if (await workspace.status() !== 'ok') throw new Error(`工作区目录不存在：${workspace.path}`)
+    if (await workspace.status() !== 'ok') throw new Error(`Рабочая папка недоступна: ${workspace.path}`)
     const { sessionId } = await this.ctx.sessionController.create({
       workspaceId: workspace.id,
       ...(this.preset === undefined ? {} : { agentPreset: this.preset }),
@@ -1558,7 +1589,7 @@ export class TelegramBridge {
     const state = this.stateFor(chatId)
     if (state.active?.sessionId === sessionId) {
       state.workspace = workspace
-      return '当前已在该会话中。'
+      return 'Этот разговор уже открыт. Просто отправь сообщение.'
     }
     const owner = this.chatsBySession.get(sessionId)
     if (owner !== undefined && owner.chatId !== chatId) throw new Error('该会话正在被另一个 Telegram 私聊使用')
@@ -1566,10 +1597,17 @@ export class TelegramBridge {
     if (archived) await this.ctx.workspaceRegistry.unarchiveSession(sessionId)
     await this.resolveAgent(sessionId)
     await this.bind(chatId, workspace, sessionId)
-    return archived ? '已取消归档并切换到该会话。' : '已切换会话。'
+    return archived ? 'Разговор восстановлен из архива. Можно продолжать.' : 'Разговор открыт. Можно продолжать.'
   }
 
   private async bind(chatId: number, workspace: Workspace, sessionId: SessionId): Promise<ActiveChatSession> {
+    if (this.stopped) throw new Error('telegram bridge stopped during session binding')
+    await this.bindings.table('chats').put(this.selectionKey(chatId), { workspaceId: workspace.id, sessionId })
+    return this.activate(chatId, workspace, sessionId)
+  }
+
+  /** Install only process-local delivery state after a durable selection has been established. */
+  private async activate(chatId: number, workspace: Workspace, sessionId: SessionId): Promise<ActiveChatSession> {
     if (this.stopped) throw new Error('telegram bridge stopped during session binding')
     const state = this.stateFor(chatId)
     await this.releaseActive(state)
@@ -1701,6 +1739,7 @@ export class TelegramBridge {
     }
     await this.ctx.workspaceRegistry.archiveSession(active.sessionId)
     await this.releaseActive(state)
+    await this.bindings.table('chats').put(this.selectionKey(chatId), { workspaceId: active.workspace.id, sessionId: null })
     return active.sessionId
   }
 
@@ -1802,7 +1841,7 @@ export class TelegramBridge {
       const parts = await this.telegramMessageParts(active, message, overrideText)
       if (parts.length > 0) await this.submitParts(active, parts, mode)
     } catch (error) {
-      await this.safeSend(message.chat.id, `⚠️ **消息处理失败**\n\n${richCodeBlock(messageOf(error))}`)
+      await this.safeSend(message.chat.id, `⚠️ Не удалось обработать сообщение.\n\n${richCodeBlock(messageOf(error))}`)
     }
   }
 
@@ -2054,7 +2093,7 @@ export class TelegramBridge {
       active.progress?.resume()
     }
     pending.reject(reason)
-    void this.safeSend(pending.chatId, '⏳ **等待回答已超时**\n\nAgent 已继续工作；你仍可回答上面的问题，回答会作为新消息发送给 Agent。发送 /cancel 可放弃回答。')
+    void this.safeSend(pending.chatId, 'Время ожидания ответа истекло; агент продолжил работу. Твой ответ будет отправлен новым сообщением. /cancel отменяет вопрос.')
   }
 
   /** Inline keyboards belong to panels sent before the widget redesign; nothing uses them now. */
@@ -2321,9 +2360,9 @@ export class TelegramBridge {
     try {
       const agent = await this.resolveAgent(pending.sessionId)
       const accepted = this.ctx.get('userQuestions')?.answer(agent, pending.timedCallId!, answer) ?? false
-      await this.safeSend(pending.chatId, accepted ? '✅ **回答已发送给 Agent**' : 'ℹ️ **该提问已在其他界面回答或已失效**')
+      await this.safeSend(pending.chatId, accepted ? 'Ответ передан агенту.' : 'На этот вопрос уже ответили или он больше не актуален.')
     } catch (error) {
-      await this.safeSend(pending.chatId, `⚠️ **回答发送失败**\n\n${richCodeBlock(messageOf(error))}`)
+      await this.safeSend(pending.chatId, `⚠️ Не удалось передать ответ.\n\n${richCodeBlock(messageOf(error))}`)
     }
   }
 
@@ -2454,7 +2493,7 @@ export class TelegramBridge {
     } catch (error) {
       if (this.stopped) return 'failed'
       this.ctx.logger.error('[telegram] result delivery failed: %s', messageOf(error))
-      await this.safeSend(chat.chatId, '⚠️ **结果发送失败**\n\n完整结果已缓存，可发送 /resend 重试；详细原因见 DSH 日志。')
+      await this.safeSend(chat.chatId, '⚠️ Не удалось отправить ответ. Полный текст сохранён; команда /resend повторит отправку. Подробности находятся в журнале DSH.')
       return 'failed'
     }
   }
@@ -2524,7 +2563,7 @@ export class TelegramBridge {
     }
     if (this.stopped) return
     if (failures.length > 0) {
-      await this.safeSend(chat.chatId, ['⚠️ **部分文件未发送**', '', ...failures, '', '可在工作区中获取这些文件。'].join('\n'))
+      await this.safeSend(chat.chatId, ['⚠️ Некоторые файлы не отправлены.', '', ...failures, '', 'Эти файлы сохранены в рабочей папке.'].join('\n'))
     }
   }
 

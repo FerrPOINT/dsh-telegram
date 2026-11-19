@@ -83,9 +83,9 @@ export function contextBreakdown(values: ProjectionValues): ContextBreakdownValu
 /** 45.2秒 under a minute, 2分42秒 from there on. */
 export function formatDuration(ms: number): string {
   const seconds = ms / 1000
-  if (seconds < 60) return `${Math.round(seconds * 10) / 10}秒`
+  if (seconds < 60) return `${Math.round(seconds * 10) / 10} с`
   const whole = Math.round(seconds)
-  return `${Math.floor(whole / 60)}分${whole % 60}秒`
+  return `${Math.floor(whole / 60)} мин ${whole % 60} с`
 }
 
 /** Compact token count: 517 / 12.4K / 1M. */
@@ -119,7 +119,7 @@ export function cacheHitPercent(usage: TokenUsageValue): string | undefined {
 }
 
 function table(header: string, rows: ReadonlyArray<readonly [string, string]>): string {
-  return [`| ${header} | 数值 |`, '| :--- | ---: |', ...rows.map(([label, value]) => `| ${label} | ${value} |`)].join('\n')
+  return [`| ${header} | Значение |`, '| :--- | ---: |', ...rows.map(([label, value]) => `| ${label} | ${value} |`)].join('\n')
 }
 
 /**
@@ -137,43 +137,43 @@ export function formatSessionStats(values: ProjectionValues, sessionLabel: strin
   const breakdown = contextBreakdown(values)
   const sections: string[] = []
   if (stats !== undefined && stats.steps > 0) {
-    const rows: Array<readonly [string, string]> = [['轮次', `${stats.turns} 轮 ${stats.steps} 步`]]
-    if (stats.llmMs > 0) rows.push(['模型用时', formatDuration(stats.llmMs)])
-    if (stats.toolMs > 0) rows.push(['工具调用用时', formatDuration(stats.toolMs)])
-    if (stats.ttftSteps > 0) rows.push(['首 token 平均（TTFT）', formatDuration(stats.ttftMs / stats.ttftSteps)])
+    const rows: Array<readonly [string, string]> = [['Ходы', `${stats.turns} ходов, ${stats.steps} шагов`]]
+    if (stats.llmMs > 0) rows.push(['Время модели', formatDuration(stats.llmMs)])
+    if (stats.toolMs > 0) rows.push(['Время инструментов', formatDuration(stats.toolMs)])
+    if (stats.ttftSteps > 0) rows.push(['Среднее время первого токена (TTFT)', formatDuration(stats.ttftMs / stats.ttftSteps)])
     if (stats.decodeMs > 0) {
-      rows.push(['输出速度（TPS）', `${formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1000))} tok/s`])
+      rows.push(['Скорость ответа (TPS)', `${formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1000))} tok/s`])
     }
-    sections.push(`## ⏱ 用时与速度\n\n${table('项目', rows)}`)
+    sections.push(`## ⏱ Время и скорость\n\n${table('Показатель', rows)}`)
   }
   const billed = usage === undefined ? 0 : usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
   if (usage !== undefined && (billed > 0 || usage.outputTokens > 0)) {
     const hit = cacheHitPercent(usage)
     const rows: Array<readonly [string, string]> = []
-    if (hit !== undefined) rows.push(['缓存命中', `${hit}%`])
-    rows.push(['未缓存输入', `${formatExactTokens(usage.uncachedInputTokens)} tok`])
-    rows.push(['缓存读取', `${formatExactTokens(usage.cacheReadTokens)} tok`])
-    if (usage.cacheWriteTokens !== 0) rows.push(['缓存写入', `${formatExactTokens(usage.cacheWriteTokens)} tok`])
-    rows.push(['输出', `${formatExactTokens(usage.outputTokens)} tok`])
-    sections.push(`## 🗄 Token 用量 · ${formatExactTokens(billed + usage.outputTokens)} tok\n\n${table('项目', rows)}`)
+    if (hit !== undefined) rows.push(['Попадание в кеш', `${hit}%`])
+    rows.push(['Вход без кеша', `${formatExactTokens(usage.uncachedInputTokens)} tok`])
+    rows.push(['Чтение кеша', `${formatExactTokens(usage.cacheReadTokens)} tok`])
+    if (usage.cacheWriteTokens !== 0) rows.push(['Запись кеша', `${formatExactTokens(usage.cacheWriteTokens)} tok`])
+    rows.push(['Ответ', `${formatExactTokens(usage.outputTokens)} tok`])
+    sections.push(`## 🗄 Расход токенов · ${formatExactTokens(billed + usage.outputTokens)} tok\n\n${table('Показатель', rows)}`)
   }
   if (occupancy !== undefined) {
     // Each figure is a heuristic estimate, so none is presented as an exact total.
     const lines = [
-      `## 🧭 上下文已用 ${occupancy.percent}%`,
-      `约 ${formatTokens(occupancy.usedTokens)} / ${formatTokens(occupancy.contextWindow)}`,
+      `## 🧭 Контекст использован на ${occupancy.percent}%`,
+      `около ${formatTokens(occupancy.usedTokens)} / ${formatTokens(occupancy.contextWindow)}`,
     ]
     if (breakdown !== undefined) {
-      lines.push(table('组成', [
-        ['系统提示词', `约 ${formatTokens(breakdown.systemTokens)}`],
-        ['工具定义', `约 ${formatTokens(breakdown.toolsTokens)}`],
-        ['对话消息', `约 ${formatTokens(breakdown.messageTokens)}`],
+      lines.push(table('Состав', [
+        ['Системные инструкции', `около ${formatTokens(breakdown.systemTokens)}`],
+        ['Определения инструментов', `около ${formatTokens(breakdown.toolsTokens)}`],
+        ['Сообщения', `около ${formatTokens(breakdown.messageTokens)}`],
       ]))
     }
     sections.push(lines.join('\n\n'))
   }
   if (sections.length === 0) {
-    return `ℹ️ **暂无统计数据**\n\n**会话**：${sessionLabel}\n\n当前会话还没有模型请求记录，完成一轮对话后再试。`
+    return `ℹ️ Статистики пока нет.\n\n**Разговор**: ${sessionLabel}\n\nВ этом разговоре ещё не было запросов к модели.`
   }
-  return ['# 📊 会话统计', `**会话**：${sessionLabel}`, ...sections.flatMap(section => ['---', section])].join('\n\n')
+  return ['# 📊 Статистика разговора', `**Разговор**: ${sessionLabel}`, ...sections.flatMap(section => ['---', section])].join('\n\n')
 }
